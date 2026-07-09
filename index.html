@@ -73,6 +73,7 @@
         p { line-height: 1.8; font-size: 15px; color: #ccc; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 </head>
 <body>
 
@@ -225,7 +226,7 @@
         let cameraMode = "FPV";
 
         let tumbleRotationVelocity = new THREE.Vector3(0, 0, 0);
-        let isSpawnedSafe = true; // Spawn protection state
+        let isSpawnedSafe = true; 
 
         let keys = { w: false, s: false, a: false, d: false };
         let mouseRoll = 0, mousePitch = 0;
@@ -308,6 +309,38 @@
             }
         }
 
+        // --- CORE MULTIPLAYER ENGINE (PEERJS) ---
+        const otherPlayers = {}; 
+        const peer = new Peer({ config: { 'iceServers': [{ 'urls': 'stun:stun.l.google.com:19302' }] } });
+
+        peer.on('open', (id) => {
+            console.log('Koneksi sukses! ID Room Kamu:', id);
+        });
+
+        function createFriendDrone(id) {
+            const friendGroup = new THREE.Group();
+            const coreMat = new THREE.MeshStandardMaterial({ color: 0xff3333, roughness: 0.2 }); // Drone temen warna Merah Neon
+            friendGroup.add(new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.4, 1.8), coreMat));
+
+            const armMat = new THREE.MeshStandardMaterial({ color: 0x222933, roughness: 0.7 });
+            const arm1 = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.15, 3.2), armMat); arm1.rotation.y = Math.PI / 4;
+            const arm2 = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.15, 3.2), armMat); arm2.rotation.y = -Math.PI / 4;
+            friendGroup.add(arm1, arm2);
+
+            scene.add(friendGroup);
+            otherPlayers[id] = friendGroup;
+        }
+
+        peer.on('connection', (conn) => {
+            conn.on('data', (data) => {
+                if (!otherPlayers[conn.peer]) createFriendDrone(conn.peer);
+                if (data.type === 'move') {
+                    otherPlayers[conn.peer].position.lerp(new THREE.Vector3(data.x, data.y, data.z), 0.3);
+                    otherPlayers[conn.peer].quaternion.slerp(new THREE.Quaternion(data.rx, data.ry, data.rz, data.rw), 0.3);
+                }
+            });
+        });
+
         // --- MAIN LOOP ---
         const clock = new THREE.Clock();
 
@@ -336,12 +369,8 @@
                 }
             }
 
-            // Lift off tracking to lift protection
-            if (drone.position.y > 1.5) {
-                isSpawnedSafe = false;
-            }
+            if (drone.position.y > 1.5) { isSpawnedSafe = false; }
 
-            // Apply Tumble Free Rotation Mechanics
             if (tumbleRotationVelocity.lengthSq() > 0.001) {
                 const tumbleQuaternion = new THREE.Quaternion().setFromEuler(
                     new THREE.Euler(tumbleRotationVelocity.z * dt, tumbleRotationVelocity.y * dt, tumbleRotationVelocity.x * dt, 'YXZ')
@@ -360,17 +389,12 @@
             drone.velocity.addScaledVector(accel, dt);
             drone.position.addScaledVector(drone.velocity, dt);
 
-            // Ground Bounds Handler
             if (drone.position.y < 0.3) {
                 drone.position.y = 0.3; 
-                
-                // Triggers rotational tumble only if spawn protection is cleared
                 if (!isSpawnedSafe && Math.abs(drone.velocity.y) > 2.5) {
                     tumbleRotationVelocity.set((Math.random()-0.5)*35, (Math.random()-0.5)*15, (Math.random()-0.5)*35);
                 }
-                
                 drone.velocity.set(drone.velocity.x * 0.6, -drone.velocity.y * 0.2, drone.velocity.z * 0.6);
-                
                 if(modeCfg.hasAutoLevel && tumbleRotationVelocity.lengthSq() < 0.1) { 
                     drone.euler.x = 0; drone.euler.z = 0; drone.rotation.setFromEuler(drone.euler); 
                 }
@@ -383,7 +407,6 @@
 
             if (currentThrottle > 0.05) { propMeshes.forEach(prop => { prop.rotation.y += 0.4; }); }
 
-            // --- CAMERA VIEW MATRIX CONTROLLER ---
             if (cameraMode === "FPV") {
                 camera.position.copy(drone.position);
                 const camRot = drone.rotation.clone();
@@ -397,7 +420,6 @@
                 camera.lookAt(drone.position);
             }
 
-            // --- MINI RC OVERLAY ENGINE ---
             let visualLeftY = boxSize - (currentThrottle * boxSize); 
             let visualLeftX = centerPos;
             if (keys.a) visualLeftX = 6;
@@ -415,7 +437,8 @@
 
             document.getElementById('osd-alt').innerText = Math.max(0, Math.round(drone.position.y));
             document.getElementById('osd-spd').innerText = Math.round(drone.velocity.length() * 3.6);
-            // Kirim data posisi lu ke semua player yang terhubung
+
+            // BROADCAST KOORDINAT KAMU KE TEMEN SECARA REALTIME
             Object.values(peer.connections).forEach(connArray => {
                 connArray.forEach(conn => {
                     if (conn.open) {
@@ -427,6 +450,7 @@
                     }
                 });
             });
+
             renderer.render(scene, camera);
         }
 
@@ -434,49 +458,7 @@
             camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
-        // --- LOGIKA MULTIPLAYER SEDERHANA (PEERJS) ---
-        const otherPlayers = {}; // Menyimpan data drone player lain
 
-        // 1. Buat koneksi ke server peer gratisan
-        const peer = new Peer({
-            config: { 'iceServers': [{ 'urls': 'stun:stun.l.google.com:19302' }] }
-        });
-
-        // Ketika berhasil konek, sistem bakal ngasih ID unik buat ruang game lu
-        peer.on('open', (id) => {
-            console.log('ID Multiplayer Lu:', id);
-            // Tips: ID ini bisa dikirim ke temen lu biar dia bisa join ke map lu!
-        });
-
-        // Fungsi membuat bentuk drone temen (Warna Merah biar beda)
-        function createFriendDrone(id) {
-            const friendGroup = new THREE.Group();
-            const coreMat = new THREE.MeshStandardMaterial({ color: 0xff3333, roughness: 0.2 }); // Merah Neon
-            friendGroup.add(new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.4, 1.8), coreMat));
-
-            const armMat = new THREE.MeshStandardMaterial({ color: 0x222933, roughness: 0.7 });
-            const arm1 = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.15, 3.2), armMat); arm1.rotation.y = Math.PI / 4;
-            const arm2 = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.15, 3.2), armMat); arm2.rotation.y = -Math.PI / 4;
-            friendGroup.add(arm1, arm2);
-
-            scene.add(friendGroup);
-            otherPlayers[id] = friendGroup;
-        }
-
-        // Menerima data koneksi dari data channel player lain
-        peer.on('connection', (conn) => {
-            conn.on('data', (data) => {
-                // Jika drone temen belum ada di map lu, bikin baru
-                if (!otherPlayers[conn.peer]) {
-                    createFriendDrone(conn.peer);
-                }
-                // Update posisi & rotasi drone temen biar sinkron di layar lu
-                if (data.type === 'move') {
-                    otherPlayers[conn.peer].position.lerp(new THREE.Vector3(data.x, data.y, data.z), 0.3);
-                    otherPlayers[conn.peer].quaternion.slerp(new THREE.Quaternion(data.rx, data.ry, data.rz, data.rw), 0.3);
-                }
-            });
-        });
         animate();
     </script>
 </body>
