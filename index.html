@@ -423,7 +423,49 @@
             camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
+        // --- LOGIKA MULTIPLAYER SEDERHANA (PEERJS) ---
+        const otherPlayers = {}; // Menyimpan data drone player lain
 
+        // 1. Buat koneksi ke server peer gratisan
+        const peer = new Peer({
+            config: { 'iceServers': [{ 'urls': 'stun:stun.l.google.com:19302' }] }
+        });
+
+        // Ketika berhasil konek, sistem bakal ngasih ID unik buat ruang game lu
+        peer.on('open', (id) => {
+            console.log('ID Multiplayer Lu:', id);
+            // Tips: ID ini bisa dikirim ke temen lu biar dia bisa join ke map lu!
+        });
+
+        // Fungsi membuat bentuk drone temen (Warna Merah biar beda)
+        function createFriendDrone(id) {
+            const friendGroup = new THREE.Group();
+            const coreMat = new THREE.MeshStandardMaterial({ color: 0xff3333, roughness: 0.2 }); // Merah Neon
+            friendGroup.add(new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.4, 1.8), coreMat));
+
+            const armMat = new THREE.MeshStandardMaterial({ color: 0x222933, roughness: 0.7 });
+            const arm1 = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.15, 3.2), armMat); arm1.rotation.y = Math.PI / 4;
+            const arm2 = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.15, 3.2), armMat); arm2.rotation.y = -Math.PI / 4;
+            friendGroup.add(arm1, arm2);
+
+            scene.add(friendGroup);
+            otherPlayers[id] = friendGroup;
+        }
+
+        // Menerima data koneksi dari data channel player lain
+        peer.on('connection', (conn) => {
+            conn.on('data', (data) => {
+                // Jika drone temen belum ada di map lu, bikin baru
+                if (!otherPlayers[conn.peer]) {
+                    createFriendDrone(conn.peer);
+                }
+                // Update posisi & rotasi drone temen biar sinkron di layar lu
+                if (data.type === 'move') {
+                    otherPlayers[conn.peer].position.lerp(new THREE.Vector3(data.x, data.y, data.z), 0.3);
+                    otherPlayers[conn.peer].quaternion.slerp(new THREE.Quaternion(data.rx, data.ry, data.rz, data.rw), 0.3);
+                }
+            });
+        });
         animate();
     </script>
 </body>
