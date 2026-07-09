@@ -415,7 +415,18 @@
 
             document.getElementById('osd-alt').innerText = Math.max(0, Math.round(drone.position.y));
             document.getElementById('osd-spd').innerText = Math.round(drone.velocity.length() * 3.6);
-
+            // Kirim data posisi lu ke semua player yang terhubung
+            Object.values(peer.connections).forEach(connArray => {
+                connArray.forEach(conn => {
+                    if (conn.open) {
+                        conn.send({
+                            type: 'move',
+                            x: drone.position.x, y: drone.position.y, z: drone.position.z,
+                            rx: drone.rotation.x, ry: drone.rotation.y, rz: drone.rotation.z, rw: drone.rotation.w
+                        });
+                    }
+                });
+            });
             renderer.render(scene, camera);
         }
 
